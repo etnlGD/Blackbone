@@ -9,8 +9,249 @@ using namespace blackbone;
 void MapCalcFromFile();
 void MapCmdFromMem();
 
-int main( int /*argc*/, char* /*argv[]*/ )
+class DiffPatternSearchPolicy : public PatternSearchPolicy
 {
+public:
+	virtual void Process(ptr_t remoteAddress, uint8_t* scanStart, size_t scanSize, std::vector<ptr_t>& out)
+	{
+		if (sizeOfPtr == 4 && remoteAddress >= 0xffffffff)
+			return;
+
+		size_t step = align ? sizeOfPtr : 1;
+		if (sizeOfPtr == 4)
+		{
+			for (size_t i = 0; i < scanSize - sizeOfPtr; i += step, remoteAddress += step)
+			{
+				int32_t valueAtAddress = *((int32_t*)&scanStart[i]);
+				if (valueAtAddress - (int32_t)remoteAddress == diff1)
+				{
+					if (i + diff3 < scanSize - sizeOfPtr)
+					{
+						valueAtAddress = *((int32_t*)&scanStart[i + diff3]);
+						if (valueAtAddress - (int32_t)(remoteAddress + diff3) == diff2)
+						{
+							out.push_back((ptr_t)(scanStart + i) - offset);
+						}
+					}
+				}
+			}
+				
+		}
+// 		else if (sizeOfPtr == 8)
+// 		{
+// 			for (size_t i = 0; i < scanSize - sizeOfPtr; i += step, remoteAddress += step)
+// 			{
+// 				int64_t valueAtAddress = *((int64_t*)&scanStart[i]);
+// 				if (valueAtAddress - (int64_t)remoteAddress == diff)
+// 					out.push_back((ptr_t)(scanStart + i));
+// 			}
+// 		}
+	}
+
+	size_t sizeOfPtr = 4;
+	int64_t diff1 = 0;
+	int64_t diff2 = 0;
+	int64_t diff3 = 0;
+	int64_t offset = 0;
+	bool align = true;
+};
+
+class LuaJIT_v1_1_5_StringSearchPolicy : public PatternSearchPolicy
+{
+public:
+	void setTargetString(const char* str)
+	{
+		targetString = str;
+		m_Len = (uint32_t)targetString.size();
+	}
+
+	virtual void Process(ptr_t remoteAddress, uint8_t* scanStart, size_t scanSize, std::vector<ptr_t>& out)
+	{
+		const uint8_t* cstart = (const uint8_t*)scanStart;
+		const uint8_t* cend = cstart + scanSize;
+		for (;;)
+		{
+			const uint8_t* res = std::search(cstart, cend, targetString.begin(), targetString.end());
+			if (res >= cend)
+				break;
+
+			if (res - scanStart >= 16 && res + m_Len < cend) // sizeof(TString) == 16
+			{
+				if (((uint32_t*)res)[-1] == m_Len && ((uint8_t*)res)[-12] == 0x4 && res[m_Len] == '\0')
+					out.emplace_back(reinterpret_cast<ptr_t>(res));
+			}
+
+			cstart = res + targetString.size();
+		}
+	}
+
+	std::string targetString;
+	uint32_t m_Len;
+};
+
+int main2(int argc, const char** argv)
+{
+	int pid = atoi(argv[1]);
+
+	std::vector<uint8_t> pattern;
+
+	uint8_t* dataOffset = NULL;
+
+	// input pointer
+	ptr_t inputPointer = 0;
+
+	// search pattern
+	size_t dataSize = 0;
+	int64_t ptrData = 0;
+	int32_t intData = 0;
+	double doubleData = 0;
+	float floatData = 0;
+
+	// search diff
+	int searchMode = 0;
+	DiffPatternSearchPolicy diffPolicy;
+	LuaJIT_v1_1_5_StringSearchPolicy luav115_Policy;
+	if (strcmp(argv[2], "-p") == 0)
+	{
+		searchMode = -1;
+		inputPointer = strtoll(argv[3], NULL, 0);
+	}
+	else if (strcmp(argv[2], "-s") == 0) // string
+	{
+		dataOffset = (uint8_t*)argv[3];
+		dataSize = strlen(argv[3]);
+	}
+	else if (strcmp(argv[2], "-lld") == 0) // pointer
+	{
+		ptrData = strtoll(argv[3], NULL, 0);
+		dataOffset = (uint8_t*)&ptrData;
+		dataSize = sizeof(ptrData);
+	}
+	else if (strcmp(argv[2], "-d") == 0) // int
+	{
+		intData = strtol(argv[3], NULL, 0);
+		dataOffset = (uint8_t*)&intData;
+		dataSize = sizeof(intData);
+	}
+	else if (strcmp(argv[2], "-df") == 0) // double float
+	{
+		doubleData = strtod(argv[3], NULL);
+		dataOffset = (uint8_t*)&doubleData;
+		dataSize = sizeof(doubleData);
+	}
+	else if (strcmp(argv[2], "-sf") == 0) // single float
+	{
+		floatData = strtof(argv[3], NULL);
+		dataOffset = (uint8_t*)&floatData;
+		dataSize = sizeof(floatData);
+	}
+	else if (strcmp(argv[2], "-diff") == 0)
+	{  // TODO: split param by comma
+		searchMode = 1;
+		diffPolicy.diff1 = strtoll(argv[3], NULL, 0);
+		diffPolicy.diff2 = strtoll(argv[4], NULL, 0);
+		diffPolicy.diff3 = strtoll(argv[5], NULL, 0);
+		if (argc > 6)
+		{
+			diffPolicy.offset = strtoll(argv[6], NULL, 0);
+
+			if (argc > 7)
+			{
+				if (strcmp(argv[7], "-s8") == 0)
+					diffPolicy.sizeOfPtr = 8;
+				else if (strcmp(argv[7], "-s4") == 0)
+					diffPolicy.sizeOfPtr = 4;
+
+				if (argc > 8)
+				{
+					if (strcmp(argv[8], "-noalign") == 0)
+						diffPolicy.align = false;
+				}
+			}
+		}
+
+	}
+	else if (strcmp(argv[2], "-ls") == 0)
+	{
+		searchMode = 2;
+		luav115_Policy.setTargetString(argv[3]);
+	}
+// 	else if (strcmp(argv[2], "-lkv") == 0) // find lua k-v pairs by TString*
+// 	{
+// 
+// 	}
+	else
+	{
+		return -1;
+	}
+
+
+
+	bool memoryDump = false;
+	int64_t bias;
+	if (argc > 4 && strcmp(argv[4], "-A") == 0)
+	{
+		memoryDump = true;
+		bias = strtoll(argv[5], NULL, 0);
+	}
+
+	for (int i = 0; i < dataSize; ++i)
+		pattern.push_back(dataOffset[i]);
+
+	// Pattern scanning
+	if (Process process; NT_SUCCESS(process.Attach(pid)))
+	{
+		std::vector<ptr_t> results;
+
+		switch (searchMode)
+		{
+		case 0:
+		{
+			PatternSearch ps(pattern);
+			ps.SearchRemoteWhole(process, false, 0, results);
+			break;
+		}
+		case 1:
+			PatternSearch::SearchRemoteWhole(process, &diffPolicy, results);
+			break;
+		case 2:
+			PatternSearch::SearchRemoteWhole(process, &luav115_Policy, results);
+			break;
+		}
+
+		if (inputPointer)
+		{
+			results.push_back(inputPointer);
+		}
+
+		for (auto it = results.begin(); it != results.end(); ++it)
+		{
+			printf("0x%p", (void*)(*it));
+			if (memoryDump)
+			{ // TODO support more types
+				auto res = process.memory().Read<int>((*it) + bias);
+				if (res.success())
+					printf(" %x", res.result());
+				else
+					printf(" *");
+			}
+			printf("\n");
+
+		}
+	}
+	else
+	{
+		printf("Attach process failed, check permission.\n");
+		return -2;
+	}
+	return 0;
+}
+
+int main( int argc, const char* argv[] )
+{
+	if (argc > 0)
+		return main2(argc, argv);
+
     // List all process PIDs matching name
     auto pids = Process::EnumByName( L"explorer.exe" );
 

@@ -9,6 +9,13 @@
 namespace blackbone
 {
 
+	class PatternSearchPolicy
+	{
+	public:
+		virtual ~PatternSearchPolicy() {}
+		virtual void Process(ptr_t remoteAddress, uint8_t* scanStart, size_t scanSize, std::vector<ptr_t>& out) = 0;
+	};
+
 class PatternSearch
 {
 public:
@@ -100,6 +107,12 @@ public:
         uint8_t wildcard, 
         std::vector<ptr_t>& out 
         ) const;
+
+	static size_t SearchRemoteWhole(
+		class Process& remote,
+		PatternSearchPolicy* policy,
+		std::vector<ptr_t>& out
+	);
 
 private:
     std::vector<uint8_t> _pattern;      // Pattern to search

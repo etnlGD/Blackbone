@@ -204,48 +204,81 @@ size_t PatternSearch::SearchRemoteWhole(
     std::vector<ptr_t>& out 
     ) const
 {
-    MEMORY_BASIC_INFORMATION64 mbi = { 0 };
-    size_t  bufsize = 1 * 1024 * 1024;  // 1 MB
-    uint8_t *buf = reinterpret_cast<uint8_t*>(VirtualAlloc( 0, bufsize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ));
+	class LocalPatternSearchPolicy : public PatternSearchPolicy
+	{
+	public:
+		virtual void Process(ptr_t remoteAddress, uint8_t* scanStart, size_t scanSize, std::vector<ptr_t>& out)
+		{
+			(void)remoteAddress;
+			if (useWildcard)
+				pThis->Search(wildcard, scanStart, scanSize, out);
+			else
+				pThis->Search(scanStart, scanSize, out);
+		}
 
-    out.clear();
+		const PatternSearch* pThis;
+		bool useWildcard;
+		uint8_t wildcard;
+	};
 
-    auto native = remote.core().native();
+	LocalPatternSearchPolicy policy;
+	policy.pThis = this;
+	policy.useWildcard = useWildcard;
+	policy.wildcard = wildcard;
 
-    for (ptr_t memptr = native->minAddr(); memptr < native->maxAddr(); memptr = mbi.BaseAddress + mbi.RegionSize)
-    {
-        auto status = remote.core().native()->VirtualQueryExT( memptr, &mbi );
 
-        if (status == STATUS_INVALID_PARAMETER || status == STATUS_ACCESS_DENIED)
-            break;
-        else if (status != STATUS_SUCCESS)
-            continue;
-
-        // Filter regions
-        if (mbi.State != MEM_COMMIT || mbi.Protect == PAGE_NOACCESS/*|| !(mbi.Protect & PAGE_READWRITE)*/)
-            continue;
-
-        // Reallocate buffer
-        if (mbi.RegionSize > bufsize)
-        {
-            bufsize = static_cast<size_t>(mbi.RegionSize);
-            VirtualFree( buf, 0, MEM_RELEASE );
-            buf = reinterpret_cast<uint8_t*>(VirtualAlloc( 0, bufsize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ));
-        }
-
-        if (remote.memory().Read( memptr, static_cast<size_t>(mbi.RegionSize), buf ) != STATUS_SUCCESS)
-            continue;
-
-        if (useWildcard)
-            Search( wildcard, buf, static_cast<size_t>(mbi.RegionSize), out, memptr );
-        else
-            Search( buf, static_cast<size_t>(mbi.RegionSize), out, memptr );
-    }
-
-    VirtualFree( buf, 0, MEM_RELEASE );
-
-    return out.size();
+	return SearchRemoteWhole(remote, &policy, out);
 }
 
+
+size_t PatternSearch::SearchRemoteWhole(class Process& remote, PatternSearchPolicy* policy, 
+										std::vector<ptr_t>& out)
+{
+	MEMORY_BASIC_INFORMATION64 mbi = { 0 };
+	size_t  bufsize = 1 * 1024 * 1024;  // 1 MB
+	uint8_t *buf = reinterpret_cast<uint8_t*>(VirtualAlloc(0, bufsize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+
+	out.clear();
+
+	auto native = remote.core().native();
+
+	for (ptr_t memptr = native->minAddr(); memptr < native->maxAddr(); memptr = mbi.BaseAddress + mbi.RegionSize)
+	{
+		auto status = remote.core().native()->VirtualQueryExT(memptr, &mbi);
+
+		if (status == STATUS_INVALID_PARAMETER || status == STATUS_ACCESS_DENIED)
+			break;
+		else if (status != STATUS_SUCCESS)
+			continue;
+
+		// Filter regions
+		if (mbi.State != MEM_COMMIT || mbi.Protect == PAGE_NOACCESS/*|| !(mbi.Protect & PAGE_READWRITE)*/)
+			continue;
+
+		// Reallocate buffer
+		if (mbi.RegionSize > bufsize)
+		{
+			bufsize = static_cast<size_t>(mbi.RegionSize);
+			VirtualFree(buf, 0, MEM_RELEASE);
+			buf = reinterpret_cast<uint8_t*>(VirtualAlloc(0, bufsize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+		}
+
+		if (remote.memory().Read(memptr, static_cast<size_t>(mbi.RegionSize), buf) != STATUS_SUCCESS)
+			continue;
+
+		size_t oldOutSize = out.size();
+		policy->Process(memptr, buf, static_cast<size_t>(mbi.RegionSize), out);
+
+		if (memptr != 0)
+		{ // rebase
+			for (size_t i = oldOutSize; i < out.size(); ++i)
+				out[i] = REBASE(out[i], buf, memptr);
+		}
+	}
+
+	VirtualFree(buf, 0, MEM_RELEASE);
+
+	return out.size();
+}
 
 }
