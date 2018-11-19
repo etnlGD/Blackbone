@@ -444,7 +444,7 @@ xcopy "$(ProjectDir)..\..\DIA\$(Platform)\symsrv.dll" "$(TargetDir)" /Y</Command
       <PreprocessorDefinitions>WIN32;NDEBUG;BLACKBONE_NO_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>
       </SDLCheck>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <BufferSecurityCheck>false</BufferSecurityCheck>
